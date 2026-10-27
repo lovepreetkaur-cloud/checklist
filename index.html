@@ -4,6 +4,10 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>Teacher & Leadership Dashboard</title>
+  
+  <!-- Supabase Browser Client Library -->
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+
   <style>
     :root {
       --bg: #f3f4f6;
@@ -53,7 +57,45 @@
       font-size: 15px;
     }
 
-    .container { max-width: 1280px; margin: 0 auto; }
+    .container { max-width: 1280px; margin: 0 auto; position: relative; }
+
+    /* Top Corner Database Connection Status Badge */
+    .db-status-badge {
+      position: fixed;
+      top: 14px;
+      right: 18px;
+      z-index: 9999;
+      background: #ffffff;
+      border: 1px solid var(--border);
+      border-radius: 20px;
+      padding: 5px 12px;
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      font-size: 12px;
+      font-weight: 700;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+      user-select: none;
+      transition: all 0.3s ease;
+    }
+
+    .status-dot {
+      width: 9px;
+      height: 9px;
+      border-radius: 50%;
+      display: inline-block;
+      transition: background-color 0.3s ease;
+    }
+
+    .status-dot.connecting { background-color: #f59e0b; animation: pulse-dot 1.2s infinite ease-in-out; }
+    .status-dot.connected { background-color: #22c55e; box-shadow: 0 0 6px rgba(34, 197, 94, 0.6); }
+    .status-dot.disconnected { background-color: #ef4444; box-shadow: 0 0 6px rgba(239, 68, 68, 0.6); }
+
+    @keyframes pulse-dot {
+      0% { opacity: 0.4; transform: scale(0.9); }
+      50% { opacity: 1; transform: scale(1.15); }
+      100% { opacity: 0.4; transform: scale(0.9); }
+    }
 
     header {
       display: flex;
@@ -391,16 +433,21 @@
     .chip.completed { background: var(--completed-bg); color: var(--completed-text); border: 1px solid var(--completed-border); text-decoration: line-through; opacity: 0.75; }
     .chip.not-started { background: var(--notstarted-bg); color: var(--notstarted-text); border: 1px solid #d1d5db; }
 
-    /* Print Stylesheet for Conference/Parent Meetings */
     @media print {
       body { background: #ffffff; padding: 0; }
-      header, .focus-mode-card, .controls-card, .brain-dump-card, .tt-toggle-btn, .action-btn, .drag-handle { display: none !important; }
+      header, .focus-mode-card, .controls-card, .brain-dump-card, .tt-toggle-btn, .action-btn, .drag-handle, .db-status-badge { display: none !important; }
       .container { max-width: 100%; }
       .task-card { break-inside: avoid; shadow: none; border: 1px solid #000; margin-bottom: 12px; }
     }
   </style>
 </head>
 <body>
+
+<!-- Fixed Top Corner Database Connection Status Badge -->
+<div class="db-status-badge" id="db-status-badge">
+  <span class="status-dot connecting" id="db-status-dot"></span>
+  <span id="db-status-text">Connecting...</span>
+</div>
 
 <div class="container">
   <header>
@@ -565,7 +612,7 @@
     <div id="urgent-container" class="tasks-grid-container" data-role="urgent"></div>
   </div>
 
-  <!-- Role Categories with Collapsible Accordions & Drag-and-Drop Containers -->
+  <!-- Role Categories -->
   <div id="role-pta-block">
     <div class="section-title" onclick="toggleSection('pta-container')">
       <span>📌 PTA Coordinator (<span id="count-badge-pta">0</span>)</span> <span style="font-size:13px; font-weight:600; color: var(--text-muted);">▼ Toggle</span>
@@ -596,6 +643,20 @@
 </div>
 
 <script>
+  // Updated Supabase Credentials Connection
+  const SUPABASE_URL = "https://fxxbpocjmfosltaawyzd.supabase.co";
+  const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_9V2c5Q6DYisRaHN71xcTtA_YigFok-J";
+  const supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY);
+
+  function updateDbStatusUI(status, label) {
+    const dot = document.getElementById('db-status-dot');
+    const text = document.getElementById('db-status-text');
+    if (!dot || !text) return;
+
+    dot.className = 'status-dot ' + status;
+    text.innerText = label;
+  }
+
   // Local Timezone Safe Helpers (Hong Kong UTC+8 Fix)
   function getTodayLocalStr() {
     const d = new Date();
@@ -815,9 +876,48 @@
   let currentFilter = 'ALL';
   let showCompleted = false;
 
-  function saveTasks(reRender = true) {
+  async function loadTasksFromSupabase() {
+    updateDbStatusUI('connecting', 'Connecting...');
+    try {
+      const { data, error } = await supabaseClient.from('tasks').select('*');
+      if (error) {
+        console.warn("Supabase fetch error (local fallback mode):", error);
+        updateDbStatusUI('disconnected', 'Offline (Local)');
+        return;
+      }
+      if (data && data.length > 0) {
+        tasks = data;
+        localStorage.setItem('teacher_dashboard_tasks_v17', JSON.stringify(tasks));
+        render();
+      } else if (data && data.length === 0) {
+        await saveTasks(true);
+      }
+      updateDbStatusUI('connected', 'DB Connected');
+    } catch (err) {
+      console.warn("Supabase network error:", err);
+      updateDbStatusUI('disconnected', 'Offline (Local)');
+    }
+  }
+
+  async function saveTasks(reRender = true) {
     localStorage.setItem('teacher_dashboard_tasks_v17', JSON.stringify(tasks));
     if (reRender) render();
+
+    try {
+      const { error } = await supabaseClient
+        .from('tasks')
+        .upsert(tasks, { onConflict: 'id' });
+      
+      if (error) {
+        console.error("Error syncing to Supabase:", error);
+        updateDbStatusUI('disconnected', 'Offline (Local)');
+      } else {
+        updateDbStatusUI('connected', 'DB Connected');
+      }
+    } catch (err) {
+      console.error("Supabase network error:", err);
+      updateDbStatusUI('disconnected', 'Offline (Local)');
+    }
   }
 
   function saveAffirmations() {
@@ -1019,7 +1119,10 @@
     const task = tasks.find(t => t.id === id);
     if (task) {
       task.notes = text;
-      localStorage.setItem('teacher_dashboard_tasks_v17', JSON.stringify(tasks));
+      clearTimeout(notesSaveTimer);
+      notesSaveTimer = setTimeout(() => {
+        saveTasks(false);
+      }, 500);
     }
   }
 
@@ -1041,10 +1144,15 @@
     saveTasks();
   }
 
-  function deleteTask(id) {
+  async function deleteTask(id) {
     if (confirm("Delete this task?")) {
       tasks = tasks.filter(t => t.id !== id);
       saveTasks();
+      try {
+        await supabaseClient.from('tasks').delete().eq('id', id);
+      } catch (e) {
+        console.error("Error deleting from Supabase:", e);
+      }
     }
   }
 
@@ -1407,7 +1515,6 @@
       }
     });
 
-    // Update Header Pill Counts & Section Title Counts
     document.getElementById('count-pta').innerText = counts.PTA;
     document.getElementById('count-eng').innerText = counts.English;
     document.getElementById('count-dhoy').innerText = counts.DHOY;
@@ -1439,7 +1546,6 @@
     attachDragListeners();
   }
 
-  // Auto-refresh timer every 30 seconds for clock and period highlighting
   setInterval(() => {
     todayStr = getTodayLocalStr();
     renderTimetable();
@@ -1450,7 +1556,7 @@
   renderTimetable();
   renderEvents();
   renderAffirmations();
-  render();
+  loadTasksFromSupabase();
 </script>
 
 </body>
