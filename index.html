@@ -59,6 +59,37 @@
 
     .container { max-width: 1280px; margin: 0 auto; position: relative; }
 
+    /* Login Modal Overlay */
+    .auth-overlay {
+      position: fixed;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: rgba(15, 23, 42, 0.85);
+      backdrop-filter: blur(8px);
+      z-index: 10000;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+    }
+
+    .auth-card {
+      background: #ffffff;
+      padding: 32px;
+      border-radius: 16px;
+      max-width: 400px;
+      width: 100%;
+      box-shadow: 0 20px 25px -5px rgba(0,0,0,0.2);
+      border: 1px solid var(--border);
+      text-align: center;
+    }
+
+    .auth-card h2 { margin-top: 0; color: var(--primary); font-size: 22px; font-weight: 800; }
+    .auth-card p { font-size: 13px; color: var(--text-muted); margin-bottom: 16px; }
+    .auth-card input { width: 100%; padding: 12px 14px; margin-bottom: 14px; border: 1.5px solid var(--border); border-radius: 8px; font-size: 14px; outline: none; }
+    .auth-card input:focus { border-color: var(--primary); }
+    .auth-card button { width: 100%; padding: 12px; background: var(--primary); color: white; border: none; border-radius: 8px; font-weight: 800; cursor: pointer; font-size: 14px; transition: background 0.15s ease; }
+    .auth-card button:hover { background: var(--primary-hover); }
+
     /* Top Corner Database Connection Status Badge */
     .db-status-badge {
       position: fixed;
@@ -443,10 +474,22 @@
 </head>
 <body>
 
+<!-- Login Modal Overlay -->
+<div class="auth-overlay" id="auth-modal" style="display: none;">
+  <div class="auth-card">
+    <h2>🔒 Private Dashboard Access</h2>
+    <p>Enter your authorized email address to receive a secure login link.</p>
+    <input type="email" id="auth-email" placeholder="kaurlovepreet98@gmail.com" />
+    <button onclick="sendMagicLink()">Send Secure Magic Link</button>
+    <p id="auth-msg" style="font-size: 12px; margin-top: 12px; font-weight: bold;"></p>
+  </div>
+</div>
+
 <!-- Fixed Top Corner Database Connection Status Badge -->
 <div class="db-status-badge" id="db-status-badge">
   <span class="status-dot connecting" id="db-status-dot"></span>
   <span id="db-status-text">Connecting...</span>
+  <button id="logout-btn" onclick="logout()" style="display:none; background:none; border:none; color:#ef4444; cursor:pointer; font-size:11px; font-weight:bold; margin-left:6px;">Logout</button>
 </div>
 
 <div class="container">
@@ -655,6 +698,43 @@
 
     dot.className = 'status-dot ' + status;
     text.innerText = label;
+  }
+
+  async function checkAuthSession() {
+    const { data: { session } } = await supabaseClient.auth.getSession();
+    if (!session) {
+      document.getElementById('auth-modal').style.display = 'flex';
+      document.getElementById('logout-btn').style.display = 'none';
+      updateDbStatusUI('disconnected', 'Login Required');
+    } else {
+      document.getElementById('auth-modal').style.display = 'none';
+      document.getElementById('logout-btn').style.display = 'inline';
+      loadTasksFromSupabase();
+    }
+  }
+
+  async function sendMagicLink() {
+    const email = document.getElementById('auth-email').value.trim();
+    const msg = document.getElementById('auth-msg');
+    if (!email) return alert("Please enter your email address!");
+
+    const { error } = await supabaseClient.auth.signInWithOtp({ 
+      email: email,
+      options: { emailRedirectTo: window.location.href } 
+    });
+
+    if (error) {
+      msg.style.color = '#ef4444';
+      msg.innerText = error.message;
+    } else {
+      msg.style.color = '#16a34a';
+      msg.innerText = '✨ Secure Magic Link sent! Check your inbox to sign in.';
+    }
+  }
+
+  async function logout() {
+    await supabaseClient.auth.signOut();
+    location.reload();
   }
 
   // Local Timezone Safe Helpers (Hong Kong UTC+8 Fix)
@@ -1556,7 +1636,7 @@
   renderTimetable();
   renderEvents();
   renderAffirmations();
-  loadTasksFromSupabase();
+  checkAuthSession();
 </script>
 
 </body>
